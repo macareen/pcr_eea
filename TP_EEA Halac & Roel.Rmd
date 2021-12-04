@@ -25,7 +25,6 @@ library(data.table)
 
 options(scipen=999, digits=2)
 
-setwd("~/Desktop/DM/1er_Año/EEA/TP2/LABO")
 
 tabla <- fread("dataset_pcr.csv")
 
