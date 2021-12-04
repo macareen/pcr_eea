@@ -1,0 +1,235 @@
+---
+title: "Regresión por componentes principales"
+author: "Diego Halac y Macarena Roel"
+output: html_notebook
+---
+
+# Carga de sets de datos originales
+También se crearon las nuevas variables resumen 
+
+```{r warning=FALSE}
+library(readxl)
+library(plyr)
+library(lubridate)
+library(pls)
+library(GGally)
+library(corrplot)
+library(devtools)
+#install_github("vqv/ggbiplot")
+library(ggbiplot)
+library(clusterSim)
+library(psych)
+library(tidyverse)
+library(data.table)
+
+
+options(scipen=999, digits=2)
+
+setwd("~/Desktop/DM/1er_Año/EEA/TP2/LABO")
+
+tabla <- fread("dataset_pcr.csv")
+
+
+```
+# Análisis exploratorio de datos faltantes
+```{r}
+tabla_nas =  tabla %>%
+        gather(., key = "variables",value = "valores") %>%
+        group_by(variables) %>% 
+        dplyr::summarise(valores_unicos = n_distinct(valores),
+                  porcentaje_faltantes = sum(is.na(valores))/nrow(tabla)*100) %>% 
+                                      arrange(desc(porcentaje_faltantes), valores_unicos)
+
+tabla_nas %>% filter(porcentaje_faltantes>0) %>% 
+ggplot(., aes(x=reorder(variables, -porcentaje_faltantes), y=porcentaje_faltantes, fill=porcentaje_faltantes)) +
+        geom_bar(stat = "identity") +
+        scale_fill_gradient(high = "firebrick", low = "orange") +
+        theme_bw() +
+        theme(axis.text.x = element_text(angle=80, vjust=0.5), legend.position = "none") +
+        coord_flip() +
+        labs(title='Porcentaje de valores faltantes', y='Porcentaje de faltantes', x='') 
+```
+```{r}
+#cantidad de NA x variable ::::: hacer grafico 
+a <- sapply(tabla, function(x) sum(is.na(x)))
+
+a
+```
+
+# Correlación entre las variables 
+
+```{r}
+
+set.seed(127)
+sample <- sample.int(n = nrow(tabla), size = floor(.75*nrow(tabla)), replace = F)
+train <- tabla[sample, ]
+test  <- tabla[-sample, ]
+
+dim(train)
+dim(test)
+
+labo_cor <- cor(na.omit(train), method="pearson") 
+corrplot::corrplot(labo_cor, method= "color", order = "hclust", tl.pos = 'n')
+
+
+```
+
+
+# PCA manual
+
+```{r}
+#normalizacion de variables
+
+train_na <- na.omit(train)
+train_norm <- as.data.frame(scale(train_na))
+ 
+test_na <- na.omit(test)
+test_norm <- as.data.frame(scale(test_na))
+ 
+
+
+labo_pca_1 <- prcomp(train_norm[,-45], scale. = T, center = T)
+labo_pca_1$x %>% head(1) 
+
+
+summary(labo_pca_1)
+
+
+#variabilidad explicada
+
+
+screeplot(labo_pca_1, type = "lines", npcs = 20)
+var_exp <- cumsum(labo_pca_1$sdev^2 / sum(labo_pca_1$sdev^2))
+
+plot(var_exp)
+```
+
+
+
+## Biplot PC1-PC2
+
+
+```{r}
+ggbiplot(labo_pca_1,ellipse=TRUE,   groups=as.factor(train_na$OBT))
+
+```
+
+# Modelo lineal standard
+
+```{r}
+# en variable respuesta hay 20% de NA en tr y te
+
+set.seed(127)
+sample <- sample.int(n = nrow(tabla), size = floor(.75*nrow(tabla)), replace = F)
+train <- tabla[sample, ]
+test  <- tabla[-sample, ]
+
+dim(train)
+dim(test)
+```
+
+
+
+
+```{r}
+# idea inicial
+
+modelo_lineal <- lm(LOS ~ .,   data = train)
+summary(modelo_lineal)
+
+
+```
+Hay mucha colinealidad. De hecho BI_mean es tan colineal que no calcula el coeficiente.
+
+```{r}
+# idea inicial
+sin_bi<-train %>% select(-BI_mean)
+
+modelo_lineal_sin_bi <- lm(LOS ~ .,   data = sin_bi)
+#summary(modelo_lineal_sin_bi)
+
+
+```
+
+```{r fig.height=5}
+library(mctest)
+mc.plot(na.omit(modelo_lineal_sin_bi), Inter = FALSE, vif = 10, ev = 0.01)
+
+```
+
+```{r}
+library(Metrics)
+pred_lineal <- predict(modelo_lineal_sin_bi, newdata =test_na[,-45])
+rmse(test_na$LOS, pred_lineal)
+
+```
+
+
+# PCR manual
+
+```{r}
+#creo un DF con variables regresoras nuevas y objetivo LOS
+pca_df <- cbind(as.data.frame(labo_pca_1$x), LOS1 = train_na$LOS)
+pca_df
+
+```
+
+
+Usando todos los PC da lo mismo.
+```{r}
+modelo_pcr_2 <- lm(LOS1 ~ ., data = pca_df)
+
+summary(modelo_pcr_2)
+
+pca_test <- prcomp(test_na[,-45], scale. = T, center = T)
+
+pred_pca <- predict(modelo_pcr_2, newdata =as.data.frame(pca_test$x))
+
+rmse(test_na$LOS, pred_pca)
+
+```
+
+
+# Utilizando PLS
+
+```{r}
+# lo mismo pero con pls
+
+train_norm_LOS <- cbind(train_norm[,-45],LOS = train_na$LOS)
+test_norm_LOS <- cbind(test_norm[,-45],LOS = test_na$LOS)
+
+
+pcr_pls<-pcr(LOS~., data = train_norm_LOS, scale = TRUE, validation = "CV")
+#validationplot(pcr_pls2, val.type = "MSEP")
+
+summary(pcr_pls)
+```
+```{r}
+
+#grafico para respaldar seleccion de 8 componentes
+validationplot(pcr_pls, val.type="RMSEP", cex.axis=0.7)
+axis(side = 1, at = c(5), cex.axis=0.7)
+abline(v = 5, col = "blue", lty = 3)
+```
+
+```{r}
+validationplot(pcr_pls, val.type="R2")
+```
+
+```{r}
+pred_pcr_pls <- predict(pcr_pls, newdata = test_norm[,-45], ncomp = 5)
+
+
+
+#calculo RMSE manual
+sqrt(mean((pred_pcr_pls - test_norm[,45])^2))
+
+```
+
+```{r}
+plot(pred_pcr_pls ~ test_norm[,45])
+#plot(pred_pcr_pls[-17] ~ test_norm[-17,45])
+
+
+```
+
